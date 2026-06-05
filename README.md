@@ -76,3 +76,7 @@ cd ~/Aether-firmware
 source install/setup.bash
 ros2 run sample_action_cpp sample_action_client
 ```
+
+## Acknowledgments
+
+* **ST3215 Motor Driver:** The low-level serial communication logic used in the `aether_motor_control` package relies on the [SCServo_Linux](https://github.com/adityakamath/SCServo_Linux) library, written by Aditya Kamath. This provides a robust, POSIX-compliant C++ port of the official Feetech/Waveshare SDK.
