@@ -4,9 +4,6 @@
 
 #include "motor_control.h"
 
-const char* motor_address = "/dev/ttyACM0";
-SMS_STS st;
-
 Motor::Motor(int id, std::string name, SMS_STS* bus) 
 {
     motor_id = id;
@@ -17,7 +14,7 @@ Motor::Motor(int id, std::string name, SMS_STS* bus)
 // Function to ping a servo to test communication
 bool Motor::ping() 
 {
-    int ID = serial_bus->Ping(motor_id);
+    int ID = serial_bus->Ping(0xFE);
 	if(ID!=-1){
         std::cout<<"ID:"<<ID<<std::endl;
 	}else{

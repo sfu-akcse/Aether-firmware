@@ -1,0 +1,3 @@
+int16 base_motor_val
+int16 elbow_motor_val
+int16 shoulder_motor_val
