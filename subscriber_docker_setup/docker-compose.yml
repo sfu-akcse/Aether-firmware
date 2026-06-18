@@ -1,0 +1,23 @@
+services:
+  aether-subscriber:
+    build:
+      context: ..
+      dockerfile: subscriber_docker_setup/Dockerfile
+    container_name: aether-subscriber
+    working_dir: /workspace
+    tty: true
+    stdin_open: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+      ROS_LOCALHOST_ONLY: "0"
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ..:/workspace
+    command: bash -lc "sleep infinity"
+    networks:
+      - aether_ros_net
+
+networks:
+  aether_ros_net:
+    external: true
+    name: aether_ros_net
