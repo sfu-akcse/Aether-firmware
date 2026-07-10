@@ -1,6 +1,14 @@
-build/
-install/
-log/
 .vscode/
 __pycache__/
 *.pyc
+
+# ROS2 Build artifacts
+build/
+install/
+log/
+
+# ESP-IDF Build artifacts
+firmware_esp32/build/
+firmware_esp32/sdkconfig
+firmware_esp32/sdkconfig.old
+firmware_esp32/.cfg/
