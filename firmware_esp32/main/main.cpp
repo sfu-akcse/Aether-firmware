@@ -4,6 +4,8 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 
+#include "motor_control.h"
+
 void app_main(void)
 {
 
