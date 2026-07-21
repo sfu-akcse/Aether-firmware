@@ -1,6 +1,10 @@
 #ifndef MOTOR_CONTROL_H
 #define MOTOR_CONTROL_H
 
+// 7.21.26 - missing/needed definitions
+#include <string>
+#include "SMS_STS.h"
+
 class Motor {
 private:
     int motor_id;
