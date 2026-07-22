@@ -40,12 +40,12 @@
 #define _SCSERIAL_H
 
 #include "SCS.h"
-#include <stdio.h>
-#include <termios.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/select.h>
+#include <stdio.h> // better to replace with esp_log.h
+#include <termios.h> // OS dependent and not supported by windows. Replace com port connection to driver with UART (driver/uart.h)
+#include <fcntl.h> // OS dependent
+#include <unistd.h> // OS dependent (POSIX)
+#include <string.h> 
+#include <sys/select.h> // POSIX
 
 class SCSerial : public SCS
 {

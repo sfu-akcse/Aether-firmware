@@ -87,21 +87,21 @@ SCSerial::SCSerial(u8 End, u8 Level):SCS(End, Level)
 bool SCSerial::begin(int baudRate, const char* serialPort)
 {
 	if(fd != -1){
-		close(fd);
+		close(fd); // fcntl + unistd 
 		fd = -1;
 	}
 	//printf("servo port:%s\n", serialPort);
     if(serialPort == NULL)
 		return false;
-    fd = open(serialPort, O_RDWR | O_NOCTTY | O_NONBLOCK);
+    fd = open(serialPort, O_RDWR | O_NOCTTY | O_NONBLOCK); // fcntl + unistd 
     if(fd == -1){
-		perror("open:");
+		perror("open:"); // stdio.h
         return false;
 	}
-    fcntl(fd, F_SETFL, FNDELAY);
+    fcntl(fd, F_SETFL, FNDELAY); // fcntl
     tcgetattr(fd, &orgopt);
-    tcgetattr(fd, &curopt);
-    speed_t CR_BAUDRATE;
+    tcgetattr(fd, &curopt); // termios
+    speed_t CR_BAUDRATE; // From termios library, need to modify to UART
     switch(baudRate){
     case 9600:
         CR_BAUDRATE = B9600;
@@ -128,7 +128,7 @@ bool SCSerial::begin(int baudRate, const char* serialPort)
         CR_BAUDRATE = B115200;
         break;
     }
-    cfsetispeed(&curopt, CR_BAUDRATE);
+    cfsetispeed(&curopt, CR_BAUDRATE); // termios
     cfsetospeed(&curopt, CR_BAUDRATE);
 
 	printf("serial speed %d\n", baudRate);
@@ -139,9 +139,9 @@ bool SCSerial::begin(int baudRate, const char* serialPort)
     curopt.c_cflag |= CS8;
     curopt.c_cflag |= CREAD;
     curopt.c_cflag |= CLOCAL;//disable modem statuc check
-    cfmakeraw(&curopt);//make raw mode
+    cfmakeraw(&curopt);//make raw mode -- from termios
     curopt.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    if(tcsetattr(fd, TCSANOW, &curopt) == 0){
+    if(tcsetattr(fd, TCSANOW, &curopt) == 0){ // termios
         return true;
     }else{
 		perror("tcsetattr:");
@@ -160,10 +160,10 @@ int SCSerial::setBaudRate(int baudRate)
     if(fd==-1){
 		return -1;
 	}
-    tcgetattr(fd, &orgopt);
+    tcgetattr(fd, &orgopt); // termios function
     tcgetattr(fd, &curopt);
     speed_t CR_BAUDRATE = baudRate;
-    cfsetispeed(&curopt, CR_BAUDRATE);
+    cfsetispeed(&curopt, CR_BAUDRATE); // termios function
     cfsetospeed(&curopt, CR_BAUDRATE);
     return 1;
 }
@@ -171,23 +171,23 @@ int SCSerial::setBaudRate(int baudRate)
 int SCSerial::readSCS(unsigned char *nDat, int nLen)
 {
     int fs_sel;
-    fd_set fs_read;
+    fd_set fs_read; // sys/select.h
 	int rvLen = 0;
 
 	// Use select() to implement multi-channel serial communication
 	while(1){
 		// Reinitialize timeout for each select() call
 		// select() modifies the timeout structure on Linux
-		struct timeval time;
+		struct timeval time; // sys/select.h
 		time.tv_sec = 0;
 		time.tv_usec = IOTimeOut*1000;
 
-		FD_ZERO(&fs_read);
-		FD_SET(fd,&fs_read);
+		FD_ZERO(&fs_read); // sys/select.h
+		FD_SET(fd,&fs_read); // sys/select.h
 
 		fs_sel = select(fd+1, &fs_read, NULL, NULL, &time);
 		if(fs_sel){
-			rvLen += read(fd, nDat+rvLen, nLen-rvLen);
+			rvLen += read(fd, nDat+rvLen, nLen-rvLen); // unistd.h
 			//printf("nLen = %d rvLen = %d\n", nLen, rvLen);
 			if(rvLen<nLen){
 				continue;
@@ -262,7 +262,7 @@ void SCSerial::rFlushSCS()
 void SCSerial::wFlushSCS()
 {
 	if(txBufLen){
-		ssize_t written = write(fd, txBuf, txBufLen);
+		ssize_t written = write(fd, txBuf, txBufLen); // unistd.h
 		// Note: write errors are not critical for this protocol, servo will timeout
 		// In production code, consider checking: if(written < 0) { handle error }
 		(void)written;  // Suppress unused variable warning
@@ -278,7 +278,7 @@ void SCSerial::wFlushSCS()
 void SCSerial::end() noexcept
 {
 	if(fd != -1){
-		close(fd);
+		close(fd); // unistd.h
 		fd = -1;
 	}
 }

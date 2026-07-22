@@ -438,7 +438,7 @@ int SMS_STS::CalibrationOfs(u8 ID)
  */
 int SMS_STS::FeedBack(int ID)
 {
-	int nLen = Read(ID, SMS_STS_PRESENT_POSITION_L, Mem, sizeof(Mem));
+	int nLen = Read(ID, SMS_STS_PRESENT_POSITION_L, Mem, sizeof(Mem)); // Need to change read function
 	if(nLen!=sizeof(Mem)){
 		Err = 1;
 		return 0;

@@ -16,9 +16,9 @@
  * @note This is an abstract base class - use concrete implementations (SCSerial)
  * @see SCS.h for class interface documentation
  */
-#include <stdio.h>
-#include <string.h>
-#include <stddef.h>
+#include <stdio.h> // OS DEPENDENT 
+#include <string.h> // change to <cstring>
+#include <stddef.h> // provided by compiler
 #include "SCS.h"
 
 /**
@@ -315,7 +315,7 @@ int SCS::Read(u8 ID, u8 MemAddr, u8 *nData, u8 nLen)
 int SCS::readByte(u8 ID, u8 MemAddr)
 {
 	u8 bDat;
-	int Size = Read(ID, MemAddr, &bDat, 1);
+	int Size = Read(ID, MemAddr, &bDat, 1); // from stdio
 	if(Size!=1){
 		return -1;
 	}else{
