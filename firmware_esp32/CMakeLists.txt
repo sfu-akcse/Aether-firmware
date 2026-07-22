@@ -4,6 +4,10 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
+# Build the Wi-Fi demo and only the components it declares as dependencies.
+# Remove this line when the unfinished motor components are ready for ESP-IDF.
+set(COMPONENTS main)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-// need to rename the 'project'
+#need to rename the 'project'
 project(aether_motor_node) 

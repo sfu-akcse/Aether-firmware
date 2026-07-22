@@ -1,3 +1,3 @@
-idf_component_register(SRCS "wifi.cpp"
+idf_component_register(SRCS "wifi_sta.cpp"
                        INCLUDE_DIRS "."
-                       REQUIRES esp_wifi)
+                       REQUIRES esp_event esp_netif esp_wifi nvs_flash)
