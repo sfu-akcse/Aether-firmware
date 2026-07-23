@@ -1,51 +1,19 @@
 /**
  * @file SCSerial.h
- * @brief Feetech serial servo hardware interface layer
+ * @brief ESP-IDF UART interface for Feetech serial servos
  *
- * @details This file provides the hardware interface layer for serial communication
- * with Feetech servo motors on Linux platforms. It handles POSIX serial port operations,
- * baud rate configuration, and low-level data transmission/reception.
+ * Provides the low-level UART communication used by the SCS protocol
+ * layer, including initialization, baud-rate configuration, buffered
+ * transmission, reception, buffer flushing, and driver cleanup.
  *
- * **Key Features:**
- * - POSIX serial port communication (termios)
- * - Configurable baud rates (38400 to 1M)
- * - Timeout handling for robust communication
- * - Resource management (file descriptor ownership)
- * - Buffer management for transmit operations
- *
- * **Inherits From:**
- * - SCS: Protocol layer for command encoding/decoding
- *
- * **Derived Classes:**
- * - SMS_STS: SMS/STS series servo control
- * - SCSCL: SCSCL series servo control
- * - HLSCL: HLSCL series servo control
- *
- * **Usage Example:**
- * @code
- * SCSerial serial;
- * if (!serial.begin(1000000, "/dev/ttyUSB0")) {
- *     printf("Failed to open serial port\n");
- *     return -1;
- * }
- * // Use serial communication methods
- * serial.end();  // Clean up
- * @endcode
- *
- * @note This class owns the file descriptor and implements RAII cleanup
- * @see SCS for protocol-level operations
+ * @see SCS.h
  */
 
-#ifndef _SCSERIAL_H
-#define _SCSERIAL_H
+#ifndef SCSERIAL_H
+#define SCSERIAL_H
 
 #include "SCS.h"
-#include <stdio.h>
-#include <termios.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/select.h>
+#include "driver/uart.h"
 
 class SCSerial : public SCS
 {
@@ -54,7 +22,7 @@ public:
 	SCSerial(u8 End);
 	SCSerial(u8 End, u8 Level);
 
-	// Disable copying (Rule of Three/Five) - class owns file descriptor resource
+	// prevent multiple objects from managing the same UART driver
 	SCSerial(const SCSerial&) = delete;
 	SCSerial& operator=(const SCSerial&) = delete;
 
@@ -65,17 +33,21 @@ protected:
 	void rFlushSCS();//
 	void wFlushSCS();//
 public:
-	unsigned long int IOTimeOut;// Input/output timeout
+	unsigned long int IOTimeOut; // receive timeout in milliseconds
 	int Err;
 public:
 	virtual int getErr(){  return Err;  }
 	virtual int setBaudRate(int baudRate);
-	virtual bool begin(int baudRate, const char* serialPort);
+	virtual bool begin(
+		int baudRate,
+		uart_port_t uartNum,
+		int txPin,
+		int rxPin
+	);
 	virtual void end() noexcept;
 protected:
-    int fd;//serial port handle
-    struct termios orgopt;//fd ort opt
-	struct termios curopt;//fd cur opt
+	uart_port_t uartNum;
+	bool driverInstalled;
 	unsigned char txBuf[SCSERVO_BUFFER_SIZE];
 	int txBufLen;
 };

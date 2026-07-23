@@ -1,51 +1,21 @@
 /**
  * @file SCSerial.cpp
- * @brief Feetech serial servo hardware interface layer implementation
- *
- * @details This file implements POSIX serial port communication for Feetech
- * servo motors on Linux platforms. It provides the hardware abstraction layer
- * between the protocol layer (SCS) and the actual serial port device.
- *
- * **Key Responsibilities:**
- * - Serial port initialization and configuration (termios)
- * - Baud rate configuration (38400 to 1M baud)
- * - Raw data transmission and reception
- * - Timeout handling using select()
- * - Buffer flushing and flow control
- * - Resource cleanup (file descriptor management)
- *
- * **Platform Support:**
- * - Linux (POSIX termios API)
- * - Supports USB-to-serial adapters (/dev/ttyUSB*, /dev/ttyACM*)
- *
- * @note Uses POSIX termios for serial port control
- * @see SCSerial.h for class interface documentation
+ * @brief ESP-IDF UART implementation for Feetech serial servos
  */
 
 #include "SCSerial.h"
-
-// macOS compatibility: Define missing baud rate constants
-#ifdef __APPLE__
-#ifndef B500000
-#define B500000 500000
-#endif
-#ifndef B1000000
-#define B1000000 1000000
-#endif
-#endif
+#include "freertos/FreeRTOS.h"
+#include "esp_err.h"
 
 /**
- * @brief Default constructor
- * 
- * Initializes serial port with:
- * - IOTimeOut = 100ms
- * - fd = -1 (not open)
- * - txBufLen = 0 (empty buffer)
+ * @brief Construct an uninitialized UART interface
  */
 SCSerial::SCSerial()
 {
 	IOTimeOut = 100;
-	fd = -1;
+	Err = 0;
+	uartNum = UART_NUM_MAX;
+	driverInstalled = false;
 	txBufLen = 0;
 }
 
@@ -57,8 +27,10 @@ SCSerial::SCSerial()
 SCSerial::SCSerial(u8 End):SCS(End)
 {
 	IOTimeOut = 100;
-	fd = -1;
-	txBufLen = 0;
+    Err = 0;
+    uartNum = UART_NUM_MAX;
+    driverInstalled = false;
+    txBufLen = 0;
 }
 
 /**
@@ -70,135 +42,175 @@ SCSerial::SCSerial(u8 End):SCS(End)
 SCSerial::SCSerial(u8 End, u8 Level):SCS(End, Level)
 {
 	IOTimeOut = 100;
-	fd = -1;
-	txBufLen = 0;
+    Err = 0;
+    uartNum = UART_NUM_MAX;
+    driverInstalled = false;
+    txBufLen = 0;
 }
 
 /**
- * @brief Initialize and open serial port
- * 
- * Opens serial port with specified baud rate and configures it for
- * 8N1 (8 data bits, no parity, 1 stop bit) communication in raw mode.
- * 
- * @param baudRate Baud rate (e.g., 1000000 for 1Mbps)
- * @param serialPort Device path (e.g., "/dev/ttyUSB0")
+ * @brief Initialize the UART interface
+ *
+ * @param baudRate UART baud rate
+ * @param uartNum ESP32 UART controller
+ * @param txPin UART transmit GPIO (tx)
+ * @param rxPin UART receive GPIO (rx)
  * @return true on success, false on failure
  */
-bool SCSerial::begin(int baudRate, const char* serialPort)
+bool SCSerial::begin(int baudRate, uart_port_t uartNum, int txPin, int rxPin)
 {
-	if(fd != -1){
-		close(fd);
-		fd = -1;
-	}
-	//printf("servo port:%s\n", serialPort);
-    if(serialPort == NULL)
-		return false;
-    fd = open(serialPort, O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if(fd == -1){
-		perror("open:");
+	// validate baud rate
+    if (baudRate <= 0 ||
+        uartNum < UART_NUM_0 ||
+        uartNum >= UART_NUM_MAX) {
+        Err = ESP_ERR_INVALID_ARG;
         return false;
-	}
-    fcntl(fd, F_SETFL, FNDELAY);
-    tcgetattr(fd, &orgopt);
-    tcgetattr(fd, &curopt);
-    speed_t CR_BAUDRATE;
-    switch(baudRate){
-    case 9600:
-        CR_BAUDRATE = B9600;
-        break;
-    case 19200:
-        CR_BAUDRATE = B19200;
-        break;
-    case 38400:
-        CR_BAUDRATE = B38400;
-        break;
-    case 57600:
-        CR_BAUDRATE = B57600;
-        break;
-    case 115200:
-        CR_BAUDRATE = B115200;
-        break;
-    case 500000:
-        CR_BAUDRATE = B500000;
-        break;
-    case 1000000:
-        CR_BAUDRATE = B1000000;
-        break;
-    default:
-        CR_BAUDRATE = B115200;
-        break;
     }
-    cfsetispeed(&curopt, CR_BAUDRATE);
-    cfsetospeed(&curopt, CR_BAUDRATE);
 
-	printf("serial speed %d\n", baudRate);
-    //Mostly 8N1
-    curopt.c_cflag &= ~PARENB;
-    curopt.c_cflag &= ~CSTOPB;
-    curopt.c_cflag &= ~CSIZE;
-    curopt.c_cflag |= CS8;
-    curopt.c_cflag |= CREAD;
-    curopt.c_cflag |= CLOCAL;//disable modem statuc check
-    cfmakeraw(&curopt);//make raw mode
-    curopt.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-    if(tcsetattr(fd, TCSANOW, &curopt) == 0){
-        return true;
-    }else{
-		perror("tcsetattr:");
-		return false;
+	// delete previously installed driver
+    if (driverInstalled) {
+    	const esp_err_t deleteResult = uart_driver_delete(this->uartNum);
+
+    	if (deleteResult != ESP_OK) {
+        	Err = deleteResult;
+        	return false;
+    	}
+
+    	driverInstalled = false;
+    	this->uartNum = UART_NUM_MAX;
+    	txBufLen = 0;
 	}
+
+	// receive-buffer size
+    constexpr int rxBufferSize = 256;
+
+	// install UART driver
+    esp_err_t result = uart_driver_install(
+        uartNum,
+        rxBufferSize,
+        0,
+        0,
+        nullptr,
+        0
+    );
+
+    if (result != ESP_OK) {
+        Err = result;
+        return false;
+    }
+
+	// configure 8N1
+    uart_config_t uartConfig = {};
+    uartConfig.baud_rate = baudRate;
+    uartConfig.data_bits = UART_DATA_8_BITS;
+    uartConfig.parity = UART_PARITY_DISABLE;
+    uartConfig.stop_bits = UART_STOP_BITS_1;
+    uartConfig.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+
+	// apply setitings to  selected UART controller
+    result = uart_param_config(uartNum, &uartConfig);
+
+    if (result != ESP_OK) {
+        uart_driver_delete(uartNum);
+        Err = result;
+        return false;
+    }
+
+	// connect UART to GPIO
+    result = uart_set_pin(
+        uartNum,
+        txPin,
+        rxPin,
+        UART_PIN_NO_CHANGE,
+        UART_PIN_NO_CHANGE
+    );
+
+	// cleanup after failure
+    if (result != ESP_OK) {
+        uart_driver_delete(uartNum);
+        Err = result;
+        return false;
+    }
+
+	// save successful state
+    this->uartNum = uartNum;
+    driverInstalled = true;
+    txBufLen = 0;
+    Err = ESP_OK;
+
+    return true;
 }
 
 /**
- * @brief Change serial port baud rate
- * 
+ * @brief Change the UART baud rate
+ *
  * @param baudRate New baud rate
- * @return 1 on success, -1 if port not open
+ * @return 1 on success, -1 on failure
  */
 int SCSerial::setBaudRate(int baudRate)
-{ 
-    if(fd==-1){
-		return -1;
-	}
-    tcgetattr(fd, &orgopt);
-    tcgetattr(fd, &curopt);
-    speed_t CR_BAUDRATE = baudRate;
-    cfsetispeed(&curopt, CR_BAUDRATE);
-    cfsetospeed(&curopt, CR_BAUDRATE);
+{
+    if (!driverInstalled) {
+        Err = ESP_ERR_INVALID_STATE;
+        return -1;
+    }
+
+    if (baudRate <= 0) {
+        Err = ESP_ERR_INVALID_ARG;
+        return -1;
+    }
+
+	// use new baud rate and save result
+    esp_err_t result = uart_set_baudrate(uartNum, static_cast<uint32_t>(baudRate));
+
+    if (result != ESP_OK) {
+        Err = result;
+        return -1;
+    }
+
+    Err = ESP_OK;
     return 1;
 }
 
-int SCSerial::readSCS(unsigned char *nDat, int nLen)
+/**
+ * @brief Read bytes from the UART receive buffer
+ *
+ * @param nDat Destination buffer
+ * @param nLen Maximum number of bytes to read
+ * @return Number of bytes read, or -1 on error
+ */
+int SCSerial::readSCS(unsigned char* nDat, int nLen)
 {
-    int fs_sel;
-    fd_set fs_read;
-	int rvLen = 0;
+    if (!driverInstalled) {
+        Err = ESP_ERR_INVALID_STATE;
+        return -1;
+    }
 
-	// Use select() to implement multi-channel serial communication
-	while(1){
-		// Reinitialize timeout for each select() call
-		// select() modifies the timeout structure on Linux
-		struct timeval time;
-		time.tv_sec = 0;
-		time.tv_usec = IOTimeOut*1000;
+	// validate the destination
+    if (nDat == nullptr || nLen <= 0) { // valid memory buffer or positive # of bytes
+        Err = ESP_ERR_INVALID_ARG;
+        return -1;
+    }
 
-		FD_ZERO(&fs_read);
-		FD_SET(fd,&fs_read);
+    int totalRead = 0;
+    const TickType_t timeoutTicks = pdMS_TO_TICKS(IOTimeOut); // convert ms to freeRTOS ticks
 
-		fs_sel = select(fd+1, &fs_read, NULL, NULL, &time);
-		if(fs_sel){
-			rvLen += read(fd, nDat+rvLen, nLen-rvLen);
-			//printf("nLen = %d rvLen = %d\n", nLen, rvLen);
-			if(rvLen<nLen){
-				continue;
-			}else{
-				return rvLen;
-			}
-		}else{
-			//printf("serial read fd read return 0\n");
-			return rvLen;
-		}
-	}
+    while (totalRead < nLen) {
+        int bytesRead = uart_read_bytes(uartNum, nDat + totalRead, static_cast<uint32_t>(nLen - totalRead), timeoutTicks);
+
+        if (bytesRead < 0) { // handles read failure
+            Err = ESP_FAIL;
+            return totalRead > 0 ? totalRead : -1; // returns partial byte count
+        }
+
+        if (bytesRead == 0) { // timeout expired
+            break;
+        }
+
+        totalRead += bytesRead;
+    }
+
+    Err = ESP_OK;
+    return totalRead;
 }
 
 /**
@@ -211,21 +223,24 @@ int SCSerial::readSCS(unsigned char *nDat, int nLen)
  * @param nLen Number of bytes to write
  * @return Current buffer length on success, -1 on error
  */
-int SCSerial::writeSCS(unsigned char *nDat, int nLen)
+int SCSerial::writeSCS(unsigned char* nDat, int nLen)
 {
-	// NULL pointer check
-	if(!nDat){
-		return -1;
-	}
+    if (nDat == nullptr || nLen <= 0) {
+        Err = ESP_ERR_INVALID_ARG;
+        return -1;
+    }
 
-	// Buffer overflow protection
-	if(txBufLen + nLen > SCSERVO_BUFFER_SIZE){
-		return -1;
-	}
-	while(nLen--){
-		txBuf[txBufLen++] = *nDat++;
-	}
-	return txBufLen;
+    if (nLen > SCSERVO_BUFFER_SIZE - txBufLen) {
+        Err = ESP_ERR_NO_MEM;
+        return -1;
+    }
+
+    while (nLen-- > 0) {
+        txBuf[txBufLen++] = *nDat++;
+    }
+
+    Err = ESP_OK;
+    return txBufLen;
 }
 
 /**
@@ -236,49 +251,78 @@ int SCSerial::writeSCS(unsigned char *nDat, int nLen)
  */
 int SCSerial::writeSCS(unsigned char bDat)
 {
-	// Buffer overflow protection
-	if(txBufLen >= SCSERVO_BUFFER_SIZE){
-		return -1;
-	}
-	txBuf[txBufLen++] = bDat;
-	return txBufLen;
+    if (txBufLen >= SCSERVO_BUFFER_SIZE) {
+        Err = ESP_ERR_NO_MEM;
+        return -1;
+    }
+
+    txBuf[txBufLen++] = bDat;
+    Err = ESP_OK;
+    return txBufLen;
 }
 
 /**
- * @brief Flush receive buffer
- * 
- * Discards any unread data in the serial port receive buffer.
+ * @brief Discard unread UART receive data
  */
 void SCSerial::rFlushSCS()
 {
-	tcflush(fd, TCIFLUSH);
+    if (!driverInstalled) {
+        Err = ESP_ERR_INVALID_STATE;
+        return;
+    }
+
+    Err = uart_flush_input(uartNum);
 }
 
 /**
- * @brief Flush transmit buffer
- * 
- * Sends all buffered data from txBuf to the serial port.
+ * @brief Send all buffered data through UART
  */
 void SCSerial::wFlushSCS()
 {
-	if(txBufLen){
-		ssize_t written = write(fd, txBuf, txBufLen);
-		// Note: write errors are not critical for this protocol, servo will timeout
-		// In production code, consider checking: if(written < 0) { handle error }
-		(void)written;  // Suppress unused variable warning
-		txBufLen = 0;
-	}
+    if (!driverInstalled) {
+        Err = ESP_ERR_INVALID_STATE;
+        return;
+    }
+
+    if (txBufLen == 0) { // if buffer is empty
+        Err = ESP_OK;
+        return;
+    }
+
+    const int bytesToWrite = txBufLen; // save packet length
+
+	// send packet
+    const int bytesWritten = uart_write_bytes(uartNum, txBuf, static_cast<size_t>(bytesToWrite));
+
+	// verify bytes were accepted
+    if (bytesWritten != bytesToWrite) {
+        txBufLen = 0;
+        Err = ESP_FAIL;
+        return;
+    }
+
+	// wait until physical transmission finishes
+    const esp_err_t result = uart_wait_tx_done(uartNum, pdMS_TO_TICKS(IOTimeOut));
+
+    txBufLen = 0; // clear packet buffer
+    Err = result;
 }
 
 /**
- * @brief Close serial port and cleanup
- * 
- * Closes the serial port file descriptor if open.
+ * @brief Uninstall the UART driver and reset the interface
  */
 void SCSerial::end() noexcept
 {
-	if(fd != -1){
-		close(fd);
-		fd = -1;
-	}
+    if (!driverInstalled) {
+        return;
+    }
+
+    Err = uart_driver_delete(uartNum);
+
+	// reset to initial state after
+    if (Err == ESP_OK) {
+        driverInstalled = false;
+        uartNum = UART_NUM_MAX;
+        txBufLen = 0;
+    }
 }

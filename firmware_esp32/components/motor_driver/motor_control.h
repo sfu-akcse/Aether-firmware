@@ -1,9 +1,9 @@
 #ifndef MOTOR_CONTROL_H
 #define MOTOR_CONTROL_H
 
-// 7.21.26 - missing/needed definitions
 #include <string>
 #include "SMS_STS.h"
+#include "driver/uart.h"
 
 class Motor {
 private:
@@ -26,7 +26,7 @@ public:
 };
 
 // Global functions for the servo and its connection
-bool setup(SMS_STS* bus, const char* address);
+bool setup(SMS_STS* bus, uart_port_t uartNum, int txPin, int rxPin);
 void close_bus(SMS_STS* bus);
 void execute_queued_movements(SMS_STS* bus);
 
