@@ -9,20 +9,24 @@
  * - SMS_STS: SMS and STS series (3 operating modes: servo, wheel closed-loop, wheel open-loop)
  * - SCSCL: SCSCL series (position control and PWM mode)
  * - HLSCL: HLS series (servo, wheel, and force control modes)
- * - SCS0009: Servos used by the AmazingHand v1 servos 
+ * - SCS0009: Servos used by the AmazingHand v1 servos
  *
  * **Usage:**
  * @code
  * #include "SCServo.h"
  *
  * SMS_STS servo;
- * servo.begin(1000000, "/dev/ttyUSB0");
- * servo.InitMotor(1, 0, 1);  // ID 1, servo mode, enable torque
- * servo.WritePosEx(1, 2048, 1000, 50);  // Move to position 2048
+ *
+ * if (!servo.begin(1000000, UART_NUM_1, SERVO_TX_PIN, SERVO_RX_PIN)) {
+ *     return;
+ * }
+ *
+ * servo.InitMotor(1, 0, 1);
+ * servo.WritePosEx(1, 2048, 1000, 50);
  * @endcode
  *
- * @note This file only includes headers; link against libSCServo.a for implementations
- * @see SMS_STS.h, SCSCL.h, SCS0009.h HLSCL.h for protocol documentation
+ * @note Implementation is built through the STServo ESP-IDF component
+ * @see SMS_STS.h for protocol documentation
  */
 
 #ifndef _SCSERVO_H

@@ -29,9 +29,16 @@
  * - Error = 0 (no error)
  */
 SCS::SCS()
+    : Level(1),
+      End(0),
+      Error(0),
+      syncReadRxPacketIndex(0),
+      syncReadRxPacketLen(0),
+      syncReadRxPacket(nullptr),
+      syncReadRxBuff(nullptr),
+      syncReadRxBuffLen(0),
+      syncReadRxBuffMax(0)
 {
-	Level = 1;  // All instructions except broadcast return acknowledgement
-	Error = 0;
 }
 
 /**
@@ -40,10 +47,9 @@ SCS::SCS()
  * @param End Endianness flag (0=little-endian, 1=big-endian)
  */
 SCS::SCS(u8 End)
+    : SCS()
 {
-	Level = 1;
-	this->End = End;
-	Error = 0;
+    this->End = End;
 }
 
 /**
@@ -53,10 +59,14 @@ SCS::SCS(u8 End)
  * @param Level Response level (1=return ACK, 0=no ACK for broadcast)
  */
 SCS::SCS(u8 End, u8 Level)
+    : SCS(End)
 {
-	this->Level = Level;
-	this->End = End;
-	Error = 0;
+    this->Level = Level;
+}
+
+SCS::~SCS()
+{
+    syncReadEnd();
 }
 
 /**
@@ -442,27 +452,46 @@ int	SCS::Ack(u8 ID)
  */
 int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
 {
-	rFlushSCS();
-	syncReadRxPacketLen = nLen;
-	u8 checkSum = (4+0xfe)+IDN+MemAddr+nLen+INST_SYNC_READ;
-	u8 i;
-	writeSCS(0xff);
-	writeSCS(0xff);
-	writeSCS(0xfe);
-	writeSCS(IDN+4);
-	writeSCS(INST_SYNC_READ);
-	writeSCS(MemAddr);
-	writeSCS(nLen);
-	for(i=0; i<IDN; i++){
-		writeSCS(ID[i]);
-		checkSum += ID[i];
-	}
-	checkSum = ~checkSum;
-	writeSCS(checkSum);
-	wFlushSCS();
-	
-	syncReadRxBuffLen = readSCS(syncReadRxBuff, syncReadRxBuffMax);
-	return syncReadRxBuffLen;
+	if (ID == nullptr ||
+        IDN == 0 ||
+        syncReadRxBuff == nullptr ||
+        syncReadRxBuffMax == 0) {
+        syncReadRxBuffLen = 0;
+        return 0;
+    }
+
+    rFlushSCS();
+    syncReadRxPacketLen = nLen;
+
+    u8 checkSum =
+        (4 + 0xfe) + IDN + MemAddr + nLen + INST_SYNC_READ;
+
+    writeSCS(0xff);
+    writeSCS(0xff);
+    writeSCS(0xfe);
+    writeSCS(IDN + 4);
+    writeSCS(INST_SYNC_READ);
+    writeSCS(MemAddr);
+    writeSCS(nLen);
+
+    for (u8 i = 0; i < IDN; i++) {
+        writeSCS(ID[i]);
+        checkSum += ID[i];
+    }
+
+    writeSCS(static_cast<u8>(~checkSum));
+    wFlushSCS();
+
+    const int bytesRead =
+        readSCS(syncReadRxBuff, syncReadRxBuffMax);
+
+    if (bytesRead <= 0) {
+        syncReadRxBuffLen = 0;
+        return 0;
+    }
+
+    syncReadRxBuffLen = static_cast<u16>(bytesRead);
+    return syncReadRxBuffLen;
 }
 
 /**
@@ -476,17 +505,14 @@ int	SCS::syncReadPacketTx(u8 ID[], u8 IDN, u8 MemAddr, u8 nLen)
  */
 void SCS::syncReadBegin(u8 IDN, u8 rxLen)
 {
-	// Clean up existing buffer to prevent memory leak
-	if(syncReadRxBuff){
-		delete[] syncReadRxBuff;
-		syncReadRxBuff = NULL;
-	}
-	syncReadRxBuffMax = IDN*(rxLen+6);
-	syncReadRxBuff = new u8[syncReadRxBuffMax];
-	// Check allocation success
-	if(!syncReadRxBuff){
-		syncReadRxBuffMax = 0;
-	}
+    syncReadEnd();
+
+    if (IDN == 0 || rxLen == 0) {
+        return;
+    }
+
+    syncReadRxBuffMax = static_cast<u16>(IDN) * (static_cast<u16>(rxLen) + 6);
+    syncReadRxBuff = new u8[syncReadRxBuffMax];
 }
 
 /**
@@ -497,10 +523,14 @@ void SCS::syncReadBegin(u8 IDN, u8 rxLen)
  */
 void SCS::syncReadEnd()
 {
-	if(syncReadRxBuff){
-		delete[] syncReadRxBuff;  // Correct: use delete[] for arrays
-		syncReadRxBuff = NULL;
-	}
+    delete[] syncReadRxBuff; // safe when pointer is nullptr
+
+    syncReadRxBuff = nullptr;
+    syncReadRxPacket = nullptr;
+    syncReadRxBuffLen = 0;
+    syncReadRxBuffMax = 0;
+    syncReadRxPacketLen = 0;
+    syncReadRxPacketIndex = 0;
 }
 
 /**

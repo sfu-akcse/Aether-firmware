@@ -22,10 +22,8 @@
  * **Inheritance Hierarchy:**
  * @code
  * SCS (abstract protocol layer)
- *  └── SCSerial (concrete Linux serial implementation)
- *       ├── SMS_STS (SMS/STS series application layer)
- *       ├── SCSCL (SCSCL series application layer)
- *       └── HLSCL (HLSCL series application layer)
+ *  └── SCSerial (ESP-IDF UART implementation)
+ *       └── SMS_STS (SMS/STS series application layer)
  * @endcode
  *
  * @note This is an abstract base class - use SCSerial or its derivatives
@@ -54,8 +52,8 @@
  * @endcode
  *
  * **Virtual Methods (must be implemented by derived class):**
- * - writeSCS(): Write data to serial port
- * - readSCS(): Read data from serial port
+ * - writeSCS(): Buffer data for transmission
+ * - readSCS(): Receive data from the serial transport
  * - rFlushSCS(): Flush receive buffer
  * - wFlushSCS(): Flush transmit buffer
  *
@@ -64,17 +62,17 @@
  * - End: Endianness flag (0=little-endian, 1=big-endian)
  * - Error: Last error status from servo
  *
- * @note Implements Rule of Five (copy operations deleted, virtual destructor)
- * @see SCSerial for Linux serial port implementation
+ * @note Copy operations are disabled because SCS owns the sync-read buffer
+ * @see SCSerial for the ESP-IDF UART implementation
  */
 class SCS{
 public:
 	SCS();
-	SCS(u8 End);
-	SCS(u8 End, u8 Level);
-	virtual ~SCS() {}  // Virtual destructor for proper cleanup in derived classes
+    SCS(u8 End);
+    SCS(u8 End, u8 Level);
+	virtual ~SCS(); // Virtual destructor for proper cleanup in derived classes
 
-	// Disable copying (Rule of Three/Five) - class owns dynamic memory (syncReadRxBuff)
+	// Prevent multiple objects from owning the same sync-read buffer
 	SCS(const SCS&) = delete;
 	SCS& operator=(const SCS&) = delete;
 

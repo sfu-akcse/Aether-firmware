@@ -135,13 +135,20 @@
  * **Usage Example:**
  * @code
  * SMS_STS servo;
- * servo.begin(1000000, "/dev/ttyUSB0");
- * servo.InitMotor(1, 0, 1);  // ID=1, Mode=0 (servo), Enable torque
- * servo.WritePosEx(1, 2048, 1000, 50);  // Move to center position
+ *
+ * const uart_port_t servoUart = UART_NUM_1;
+ * const int servoTxPin = SERVO_TX_PIN;
+ * const int servoRxPin = SERVO_RX_PIN;
+ *
+ * if (!servo.begin(1000000, servoUart, servoTxPin, servoRxPin)) {
+ *     return;
+ * }
+ * servo.InitMotor(1, 0, 1);
+ * servo.WritePosEx(1, 2048, 1000, 50);
  * @endcode
  *
- * @note Remember to call begin() before using any servo methods
- * @see SCSerial for serial communication layer methods
+ * @note Replace SERVO_TX_PIN and SERVO_RX_PIN with GPIOs connected to servo adapter
+ * @see SCSerial.h for the ESP-IDF UART communication layer
  */
 class SMS_STS : public SCSerial
 {
