@@ -17,4 +17,3 @@ input_mode_t input_selector_get_mode(void);
 
 // Request a mode change via the queue (call from any task)
 void input_selector_request_mode(input_mode_t mode);
-
