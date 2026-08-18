@@ -12,6 +12,7 @@
 #include "sdkconfig.h"
 
 #ifndef CONFIG_AETHER_TCP_HOST
+// Keeps older sdkconfig files buildable until menuconfig is regenerated.
 #define CONFIG_AETHER_TCP_HOST "10.0.0.20"
 #endif
 
@@ -23,6 +24,8 @@ constexpr int TASK_STACK_SIZE = 6144;
 
 void receive_stream(int client_socket)
 {
+    // TCP is a byte stream: one recv() may contain part of a JSON message or
+    // several messages. Accumulate bytes until the sender's newline delimiter.
     std::string pending;
     pending.reserve(RECEIVE_BUFFER_SIZE);
     char buffer[RECEIVE_BUFFER_SIZE];
@@ -45,6 +48,7 @@ void receive_stream(int client_socket)
         for (int index = 0; index < received; ++index) {
             const char byte = buffer[index];
             if (byte == '\n') {
+                // The Python server sends every JSON object as "<json>\n".
                 if (discarding_oversized_line) {
                     ESP_LOGW(TAG, "Discarded oversized JSON line");
                 } else if (!pending.empty()) {
@@ -64,6 +68,7 @@ void receive_stream(int client_socket)
                 continue;
             }
             if (pending.size() >= CONFIG_AETHER_TCP_MAX_LINE_LENGTH) {
+                // Do not let malformed input grow the buffer without a limit.
                 pending.clear();
                 discarding_oversized_line = true;
                 continue;
@@ -75,6 +80,8 @@ void receive_stream(int client_socket)
 
 int connect_to_laptop()
 {
+    // The laptop Python program is the TCP server/sender. The ESP32 is the
+    // TCP client/receiver and reaches it through the laptop's LAN IPv4 address.
     const int client_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (client_socket < 0) {
         ESP_LOGE(TAG, "Could not create socket: errno %d", errno);
@@ -103,6 +110,8 @@ int connect_to_laptop()
 
 void receiver_task(void *)
 {
+    // Run independently of app_main and reconnect whenever the laptop program
+    // starts late, Docker restarts, Wi-Fi briefly drops, or the socket closes.
     while (true) {
         const int client_socket = connect_to_laptop();
         if (client_socket < 0) {
@@ -122,6 +131,7 @@ void receiver_task(void *)
 
 extern "C" esp_err_t tcp_receiver_start(void)
 {
+    // Socket reads block, so keep them in a dedicated FreeRTOS task.
     const BaseType_t created =
         xTaskCreate(receiver_task, "tcp_receiver", TASK_STACK_SIZE, nullptr, 5, nullptr);
     if (created != pdPASS) {
@@ -130,7 +140,6 @@ extern "C" esp_err_t tcp_receiver_start(void)
     }
     return ESP_OK;
 }
-
 
 /*
 CHANGE WI-FI AND LAPTOP IP, BUILD, FLASH, AND MONITOR

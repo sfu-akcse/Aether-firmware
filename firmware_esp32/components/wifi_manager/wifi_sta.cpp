@@ -18,11 +18,14 @@ constexpr char TAG[] = "wifi_sta";
 constexpr EventBits_t CONNECTED_BIT = BIT0;
 constexpr EventBits_t FAILED_BIT = BIT1;
 
+// The event group lets wifi_sta_start() wait until the asynchronous Wi-Fi
+// driver either receives an IP address or exhausts its connection retries.
 EventGroupHandle_t connection_events;
 int retry_count;
 
 void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
+    // Starting station mode does not automatically join the configured AP.
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         ESP_LOGI(TAG, "Connecting to \"%s\"...", CONFIG_AETHER_WIFI_STA_SSID);
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_connect());
@@ -30,6 +33,8 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
     }
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        // A disconnect can happen during startup or later due to weak signal.
+        // Retry a bounded number of times so callers eventually receive failure.
         const auto *event = static_cast<wifi_event_sta_disconnected_t *>(event_data);
         if (retry_count < CONFIG_AETHER_WIFI_STA_MAX_RETRY) {
             ++retry_count;
@@ -46,6 +51,7 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
     }
 
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        // TCP services must not start until DHCP has assigned an IP address.
         const auto *event = static_cast<ip_event_got_ip_t *>(event_data);
         retry_count = 0;
         ESP_LOGI(TAG, "Connected; IP address: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -56,6 +62,8 @@ void wifi_event_handler(void *, esp_event_base_t event_base, int32_t event_id, v
 
 esp_err_t initialize_nvs()
 {
+    // The ESP-IDF Wi-Fi driver stores calibration and other persistent data in
+    // NVS. Erase and recreate NVS only when its existing format is unusable.
     esp_err_t error = nvs_flash_init();
     if (error == ESP_ERR_NVS_NO_FREE_PAGES || error == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "Could not erase NVS");
@@ -73,6 +81,7 @@ extern "C" esp_err_t wifi_sta_start(void)
         return ESP_ERR_INVALID_ARG;
     }
 
+    // esp_netif connects the Wi-Fi driver to lwIP, which supplies IP and TCP.
     ESP_RETURN_ON_ERROR(initialize_nvs(), TAG, "Could not initialize NVS");
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "Could not initialize TCP/IP stack");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "Could not create event loop");
@@ -82,6 +91,7 @@ extern "C" esp_err_t wifi_sta_start(void)
         return ESP_ERR_NO_MEM;
     }
 
+    // Create the default station interface and its DHCP client.
     esp_netif_t *station = esp_netif_create_default_wifi_sta();
     if (station == nullptr) {
         return ESP_FAIL;
@@ -98,6 +108,7 @@ extern "C" esp_err_t wifi_sta_start(void)
         TAG,
         "Could not register IP event handler");
 
+    // Copy credentials generated from values selected in idf.py menuconfig.
     wifi_config_t station_config = {};
     std::strncpy(reinterpret_cast<char *>(station_config.sta.ssid),
                  CONFIG_AETHER_WIFI_STA_SSID,
@@ -114,6 +125,7 @@ extern "C" esp_err_t wifi_sta_start(void)
         esp_wifi_set_config(WIFI_IF_STA, &station_config), TAG, "Could not configure station");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Could not start Wi-Fi");
 
+    // Block app startup until Wi-Fi is usable by tcp_receiver, or has failed.
     const EventBits_t result = xEventGroupWaitBits(
         connection_events, CONNECTED_BIT | FAILED_BIT, pdFALSE, pdFALSE, portMAX_DELAY);
 
