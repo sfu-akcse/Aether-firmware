@@ -5,5 +5,4 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-// need to rename the 'project'
 project(aether_motor_node) 
