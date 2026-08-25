@@ -1,0 +1,22 @@
+menu "Aether TCP receiver configuration"
+
+    config AETHER_TCP_HOST
+        string "Laptop IPv4 address"
+        default "10.0.0.20"
+        help
+            LAN IPv4 address of the laptop running the TCP JSON server.
+
+    config AETHER_TCP_PORT
+        int "Laptop TCP server port"
+        range 1 65535
+        default 8765
+
+    config AETHER_TCP_MAX_LINE_LENGTH
+        int "Maximum JSON line length"
+        range 128 16384
+        default 2048
+        help
+            Maximum number of bytes accepted for one newline-delimited JSON
+            message. Longer messages are discarded.
+
+endmenu
