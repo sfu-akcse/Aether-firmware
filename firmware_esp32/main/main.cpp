@@ -7,113 +7,333 @@
 #include "motor_control.h"
 
 
-static const char *TAG = "ARM_CALIBRATION";
+static const char *TAG = "IK_PATH_TEST";
 
-// UART connection
+
+// --------------------------------------------------
+// UART
+// --------------------------------------------------
+
 static constexpr uart_port_t SERVO_UART = UART_NUM_1;
-static constexpr int SERVO_TX_PIN = 19;   // D19
-static constexpr int SERVO_RX_PIN = 18;   // D18
 
+static constexpr int SERVO_TX_PIN = 19;
+static constexpr int SERVO_RX_PIN = 18;
+
+
+// --------------------------------------------------
 // Servo IDs
+// --------------------------------------------------
+
 static constexpr int SHOULDER_ID = 1;
 static constexpr int ELBOW_ID = 2;
 
-// Reference position
-static constexpr int CENTER = 2047;
 
-// VERY small first movement
-static constexpr int TEST_OFFSET = 30;
+// --------------------------------------------------
+// Calibrated starting pose
+// --------------------------------------------------
 
-// Therefore:
-static constexpr int POSITIVE_TEST = CENTER + TEST_OFFSET; // 2077
-static constexpr int NEGATIVE_TEST = CENTER - TEST_OFFSET; // 2017
-
-// Gentle movement settings
-static constexpr int SPEED = 150;
-static constexpr int ACCELERATION = 20;
+static constexpr int SHOULDER_START = 2030;
+static constexpr int ELBOW_START = 2085;
 
 
-void printPosition(
+// --------------------------------------------------
+// Motion settings
+// --------------------------------------------------
+
+static constexpr int SPEED = 120;
+static constexpr int ACCELERATION = 15;
+
+
+// --------------------------------------------------
+// Position monitoring
+// --------------------------------------------------
+
+static constexpr int POSITION_TOLERANCE = 10;
+static constexpr int POLL_INTERVAL_MS = 100;
+static constexpr int MOVEMENT_TIMEOUT_MS = 15000;
+
+
+// --------------------------------------------------
+// One IK path point
+// --------------------------------------------------
+
+struct IKPoint
+{
+    int z;
+    int y;
+
+    int shoulder_position;
+    int elbow_position;
+};
+
+
+// --------------------------------------------------
+// IK-generated path
+//
+// L1 = 135 mm
+// L2 = 85 mm
+// --------------------------------------------------
+
+static constexpr IKPoint PATH[] =
+{
+    {
+        218,
+        10,
+        2125,
+        2255
+    },
+
+    {
+        210,
+        20,
+        2240,
+        2471
+    },
+
+    {
+        110,
+        170,
+        2884,
+        2624
+    },
+
+    {
+        7,
+        220,
+        3034,
+        2085
+    }
+};
+
+
+static constexpr int PATH_LENGTH =
+    sizeof(PATH) / sizeof(PATH[0]);
+
+
+// --------------------------------------------------
+// Wait until servo actually reaches target
+// --------------------------------------------------
+
+bool waitForPosition(
     SMS_STS &bus,
     int id,
+    int target,
     const char *name)
 {
-    int position = bus.ReadPos(id);
+    for (
+        int elapsed = 0;
+        elapsed <= MOVEMENT_TIMEOUT_MS;
+        elapsed += POLL_INTERVAL_MS)
+    {
+        int position = bus.ReadPos(id);
 
-    if (position < 0)
-    {
-        ESP_LOGW(
-            TAG,
-            "%s position read FAILED",
-            name);
+        if (position >= 0)
+        {
+            int error = position - target;
+
+            if (error < 0)
+            {
+                error = -error;
+            }
+
+            if (elapsed % 500 == 0)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "%s current=%d target=%d",
+                    name,
+                    position,
+                    target);
+            }
+
+            if (error <= POSITION_TOLERANCE)
+            {
+                ESP_LOGI(
+                    TAG,
+                    "%s reached target: %d",
+                    name,
+                    position);
+
+                return true;
+            }
+        }
+
+        vTaskDelay(
+            pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
-    else
-    {
-        ESP_LOGI(
-            TAG,
-            "%s position = %d",
-            name,
-            position);
-    }
+
+    int finalPosition =
+        bus.ReadPos(id);
+
+    ESP_LOGE(
+        TAG,
+        "%s did not reach target %d",
+        name,
+        target);
+
+    ESP_LOGE(
+        TAG,
+        "%s final readback = %d",
+        name,
+        finalPosition);
+
+    return false;
 }
 
 
-bool moveServo(
+// --------------------------------------------------
+// Move both joints to one path point
+// --------------------------------------------------
+
+bool moveToPoint(
     SMS_STS &bus,
-    int id,
-    int position,
-    const char *name)
+    const IKPoint &point,
+    int pointNumber)
 {
+    ESP_LOGI(TAG, "==================================");
+
     ESP_LOGI(
         TAG,
-        "%s -> commanding position %d",
-        name,
-        position);
+        "Moving to path point %d",
+        pointNumber);
 
-    int result = bus.WritePosEx(
-        id,
-        position,
-        SPEED,
-        ACCELERATION);
+    ESP_LOGI(
+        TAG,
+        "Target coordinate: z=%d mm, y=%d mm",
+        point.z,
+        point.y);
 
-    if (result != 1)
+    ESP_LOGI(
+        TAG,
+        "Shoulder target = %d",
+        point.shoulder_position);
+
+    ESP_LOGI(
+        TAG,
+        "Elbow target = %d",
+        point.elbow_position);
+
+    ESP_LOGI(TAG, "==================================");
+
+
+    // --------------------------------------------------
+    // Command both joints
+    // --------------------------------------------------
+
+    if (bus.WritePosEx(
+            SHOULDER_ID,
+            point.shoulder_position,
+            SPEED,
+            ACCELERATION) != 1)
     {
         ESP_LOGE(
             TAG,
-            "%s movement command FAILED",
-            name);
+            "Shoulder command failed");
 
         return false;
     }
 
-    vTaskDelay(pdMS_TO_TICKS(2500));
 
-    printPosition(
-        bus,
-        id,
-        name);
+    vTaskDelay(
+        pdMS_TO_TICKS(100));
+
+
+    if (bus.WritePosEx(
+            ELBOW_ID,
+            point.elbow_position,
+            SPEED,
+            ACCELERATION) != 1)
+    {
+        ESP_LOGE(
+            TAG,
+            "Elbow command failed");
+
+        return false;
+    }
+
+
+    // --------------------------------------------------
+    // Wait until both joints actually arrive
+    // --------------------------------------------------
+
+    if (!waitForPosition(
+            bus,
+            SHOULDER_ID,
+            point.shoulder_position,
+            "Shoulder"))
+    {
+        return false;
+    }
+
+
+    if (!waitForPosition(
+            bus,
+            ELBOW_ID,
+            point.elbow_position,
+            "Elbow"))
+    {
+        return false;
+    }
+
+
+    int shoulderReadback =
+        bus.ReadPos(SHOULDER_ID);
+
+    int elbowReadback =
+        bus.ReadPos(ELBOW_ID);
+
+
+    ESP_LOGI(
+        TAG,
+        "Point %d reached",
+        pointNumber);
+
+    ESP_LOGI(
+        TAG,
+        "Shoulder readback = %d",
+        shoulderReadback);
+
+    ESP_LOGI(
+        TAG,
+        "Elbow readback = %d",
+        elbowReadback);
+
+
+    // Small pause before next point
+    vTaskDelay(
+        pdMS_TO_TICKS(1500));
+
 
     return true;
 }
 
 
+// --------------------------------------------------
+// Main
+// --------------------------------------------------
+
 extern "C" void app_main(void)
 {
-    ESP_LOGI(
-        TAG,
-        "===================================");
+    ESP_LOGI(TAG, "==================================");
+    ESP_LOGI(TAG, "Aether 3-Point IK Path Test");
+    ESP_LOGI(TAG, "==================================");
 
     ESP_LOGI(
         TAG,
-        "Assembled arm direction test");
+        "L1 = 135 mm");
 
     ESP_LOGI(
         TAG,
-        "===================================");
+        "L2 = 85 mm");
+
 
     SMS_STS bus;
 
-    // Initialize ST3215 communication bus
+
+    // --------------------------------------------------
+    // Initialize servo bus
+    // --------------------------------------------------
+
     if (!setup(
             &bus,
             SERVO_UART,
@@ -127,16 +347,16 @@ extern "C" void app_main(void)
         return;
     }
 
+
+    // --------------------------------------------------
+    // Wait for servo power
+    // --------------------------------------------------
+
     ESP_LOGI(
         TAG,
-        "Servo UART initialized");
+        "Waiting for servos...");
 
-    /*
-     * Wait until both servos respond.
-     *
-     * This allows the ESP32 to be started first
-     * while the 12 V servo supply is still OFF.
-     */
+
     while (true)
     {
         int shoulderPing =
@@ -147,6 +367,7 @@ extern "C" void app_main(void)
 
         int elbowPing =
             bus.Ping(ELBOW_ID);
+
 
         if (
             shoulderPing == SHOULDER_ID &&
@@ -159,6 +380,7 @@ extern "C" void app_main(void)
             break;
         }
 
+
         ESP_LOGW(
             TAG,
             "Waiting... Shoulder=%s Elbow=%s",
@@ -169,13 +391,16 @@ extern "C" void app_main(void)
                 ? "OK"
                 : "FAIL");
 
+
         vTaskDelay(
             pdMS_TO_TICKS(1000));
     }
 
-    /*
-     * Enable torque.
-     */
+
+    // --------------------------------------------------
+    // Enable torque
+    // --------------------------------------------------
+
     bus.EnableTorque(
         SHOULDER_ID,
         1);
@@ -184,199 +409,129 @@ extern "C" void app_main(void)
         ELBOW_ID,
         1);
 
+
+    // --------------------------------------------------
+    // Establish known starting pose
+    // --------------------------------------------------
+
     ESP_LOGI(
         TAG,
-        "Torque enabled");
+        "Returning arm to straight starting pose");
 
-    /*
-     * First return both motors to our known
-     * reference position.
-     */
+
+    if (bus.WritePosEx(
+            ELBOW_ID,
+            ELBOW_START,
+            SPEED,
+            ACCELERATION) != 1)
+    {
+        ESP_LOGE(
+            TAG,
+            "Elbow start command failed");
+
+        return;
+    }
+
+
+    if (!waitForPosition(
+            bus,
+            ELBOW_ID,
+            ELBOW_START,
+            "Elbow"))
+    {
+        return;
+    }
+
+
+    if (bus.WritePosEx(
+            SHOULDER_ID,
+            SHOULDER_START,
+            SPEED,
+            ACCELERATION) != 1)
+    {
+        ESP_LOGE(
+            TAG,
+            "Shoulder start command failed");
+
+        return;
+    }
+
+
+    if (!waitForPosition(
+            bus,
+            SHOULDER_ID,
+            SHOULDER_START,
+            "Shoulder"))
+    {
+        return;
+    }
+
+
     ESP_LOGI(
         TAG,
-        "Returning both joints to centre...");
+        "Straight starting pose confirmed");
 
-    bus.WritePosEx(
-        SHOULDER_ID,
-        CENTER,
-        SPEED,
-        ACCELERATION);
+    ESP_LOGI(
+        TAG,
+        "Path begins in 3 seconds");
 
-    vTaskDelay(
-        pdMS_TO_TICKS(100));
+    ESP_LOGI(
+        TAG,
+        "Be ready to remove 12 V power if needed");
 
-    bus.WritePosEx(
-        ELBOW_ID,
-        CENTER,
-        SPEED,
-        ACCELERATION);
 
     vTaskDelay(
         pdMS_TO_TICKS(3000));
 
-    printPosition(
-        bus,
-        SHOULDER_ID,
-        "Shoulder");
 
-    printPosition(
-        bus,
-        ELBOW_ID,
-        "Elbow");
+    // --------------------------------------------------
+    // Execute path
+    // --------------------------------------------------
 
-    /*
-     * =================================================
-     * SHOULDER TEST
-     * =================================================
-     */
-
-    ESP_LOGI(
-        TAG,
-        "===================================");
-
-    ESP_LOGI(
-        TAG,
-        "SHOULDER TEST");
-
-    ESP_LOGI(
-        TAG,
-        "Watch which direction the arm moves.");
-
-    ESP_LOGI(
-        TAG,
-        "Starting in 3 seconds...");
-
-    vTaskDelay(
-        pdMS_TO_TICKS(3000));
-
-    // +30 counts
-    if (!moveServo(
-            bus,
-            SHOULDER_ID,
-            POSITIVE_TEST,
-            "Shoulder"))
+    for (
+        int i = 0;
+        i < PATH_LENGTH;
+        i++)
     {
-        return;
+        if (!moveToPoint(
+                bus,
+                PATH[i],
+                i + 1))
+        {
+            ESP_LOGE(
+                TAG,
+                "Path stopped at point %d",
+                i + 1);
+
+            return;
+        }
     }
 
-    // Back to centre
-    if (!moveServo(
-            bus,
-            SHOULDER_ID,
-            CENTER,
-            "Shoulder"))
-    {
-        return;
-    }
 
-    vTaskDelay(
-        pdMS_TO_TICKS(2000));
+    // --------------------------------------------------
+    // Finished
+    // --------------------------------------------------
 
-    // -30 counts
-    if (!moveServo(
-            bus,
-            SHOULDER_ID,
-            NEGATIVE_TEST,
-            "Shoulder"))
-    {
-        return;
-    }
-
-    // Back to centre
-    if (!moveServo(
-            bus,
-            SHOULDER_ID,
-            CENTER,
-            "Shoulder"))
-    {
-        return;
-    }
-
-    /*
-     * =================================================
-     * ELBOW TEST
-     * =================================================
-     */
+    ESP_LOGI(TAG, "==================================");
 
     ESP_LOGI(
         TAG,
-        "===================================");
+        "IK PATH COMPLETE");
 
     ESP_LOGI(
         TAG,
-        "ELBOW TEST");
+        "Final shoulder = %d",
+        bus.ReadPos(SHOULDER_ID));
 
     ESP_LOGI(
         TAG,
-        "Watch which direction the forearm moves.");
+        "Final elbow = %d",
+        bus.ReadPos(ELBOW_ID));
 
-    ESP_LOGI(
-        TAG,
-        "Starting in 3 seconds...");
+    ESP_LOGI(TAG, "==================================");
 
-    vTaskDelay(
-        pdMS_TO_TICKS(3000));
 
-    // +30 counts
-    if (!moveServo(
-            bus,
-            ELBOW_ID,
-            POSITIVE_TEST,
-            "Elbow"))
-    {
-        return;
-    }
-
-    // Back to centre
-    if (!moveServo(
-            bus,
-            ELBOW_ID,
-            CENTER,
-            "Elbow"))
-    {
-        return;
-    }
-
-    vTaskDelay(
-        pdMS_TO_TICKS(2000));
-
-    // -30 counts
-    if (!moveServo(
-            bus,
-            ELBOW_ID,
-            NEGATIVE_TEST,
-            "Elbow"))
-    {
-        return;
-    }
-
-    // Back to centre
-    if (!moveServo(
-            bus,
-            ELBOW_ID,
-            CENTER,
-            "Elbow"))
-    {
-        return;
-    }
-
-    ESP_LOGI(
-        TAG,
-        "===================================");
-
-    ESP_LOGI(
-        TAG,
-        "CALIBRATION TEST COMPLETE");
-
-    ESP_LOGI(
-        TAG,
-        "Both joints returned to centre.");
-
-    ESP_LOGI(
-        TAG,
-        "===================================");
-
-    // Prevent test from repeating
+    // Hold final pose
     while (true)
     {
         vTaskDelay(
