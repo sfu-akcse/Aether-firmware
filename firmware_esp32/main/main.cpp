@@ -2,106 +2,48 @@
 #include "freertos/task.h"
 
 #include "esp_log.h"
-#include "driver/uart.h"
 
-#include "motor_control.h"
-
-
-static const char *TAG = "IK_PATH_TEST";
+#include "arm_controller.h"
 
 
-// --------------------------------------------------
-// UART
-// --------------------------------------------------
-
-static constexpr uart_port_t SERVO_UART = UART_NUM_1;
-
-static constexpr int SERVO_TX_PIN = 19;
-static constexpr int SERVO_RX_PIN = 18;
+static const char *TAG = "MAIN";
 
 
 // --------------------------------------------------
-// Servo IDs
+// One joint-angle waypoint
 // --------------------------------------------------
 
-static constexpr int SHOULDER_ID = 1;
-static constexpr int ELBOW_ID = 2;
-
-
-// --------------------------------------------------
-// Calibrated starting pose
-// --------------------------------------------------
-
-static constexpr int SHOULDER_START = 2030;
-static constexpr int ELBOW_START = 2085;
-
-
-// --------------------------------------------------
-// Motion settings
-// --------------------------------------------------
-
-static constexpr int SPEED = 120;
-static constexpr int ACCELERATION = 15;
-
-
-// --------------------------------------------------
-// Position monitoring
-// --------------------------------------------------
-
-static constexpr int POSITION_TOLERANCE = 10;
-static constexpr int POLL_INTERVAL_MS = 100;
-static constexpr int MOVEMENT_TIMEOUT_MS = 15000;
-
-
-// --------------------------------------------------
-// One IK path point
-// --------------------------------------------------
-
-struct IKPoint
+struct JointPoint
 {
-    int z;
-    int y;
+    const char *name;
 
-    int shoulder_position;
-    int elbow_position;
+    float shoulderDegrees;
+    float elbowDegrees;
 };
 
 
 // --------------------------------------------------
-// IK-generated path
-//
-// L1 = 135 mm
-// L2 = 85 mm
+// Known-good test path
 // --------------------------------------------------
 
-static constexpr IKPoint PATH[] =
+static constexpr JointPoint PATH[] =
 {
     {
-        218,
-        10,
-        2125,
-        2255
+        "Point 1",
+        8.4f,
+        -15.0f
     },
 
     {
-        210,
-        20,
-        2240,
-        2471
+        "Point 2",
+        18.5f,
+        -34.0f
     },
 
     {
-        110,
-        170,
-        2884,
-        2624
-    },
-
-    {
-        7,
-        220,
-        3034,
-        2085
+        "Point 3",
+        28.6f,
+        -45.3f
     }
 };
 
@@ -110,374 +52,44 @@ static constexpr int PATH_LENGTH =
     sizeof(PATH) / sizeof(PATH[0]);
 
 
-// --------------------------------------------------
-// Wait until servo actually reaches target
-// --------------------------------------------------
-
-bool waitForPosition(
-    SMS_STS &bus,
-    int id,
-    int target,
-    const char *name)
-{
-    for (
-        int elapsed = 0;
-        elapsed <= MOVEMENT_TIMEOUT_MS;
-        elapsed += POLL_INTERVAL_MS)
-    {
-        int position = bus.ReadPos(id);
-
-        if (position >= 0)
-        {
-            int error = position - target;
-
-            if (error < 0)
-            {
-                error = -error;
-            }
-
-            if (elapsed % 500 == 0)
-            {
-                ESP_LOGI(
-                    TAG,
-                    "%s current=%d target=%d",
-                    name,
-                    position,
-                    target);
-            }
-
-            if (error <= POSITION_TOLERANCE)
-            {
-                ESP_LOGI(
-                    TAG,
-                    "%s reached target: %d",
-                    name,
-                    position);
-
-                return true;
-            }
-        }
-
-        vTaskDelay(
-            pdMS_TO_TICKS(POLL_INTERVAL_MS));
-    }
-
-    int finalPosition =
-        bus.ReadPos(id);
-
-    ESP_LOGE(
-        TAG,
-        "%s did not reach target %d",
-        name,
-        target);
-
-    ESP_LOGE(
-        TAG,
-        "%s final readback = %d",
-        name,
-        finalPosition);
-
-    return false;
-}
-
-
-// --------------------------------------------------
-// Move both joints to one path point
-// --------------------------------------------------
-
-bool moveToPoint(
-    SMS_STS &bus,
-    const IKPoint &point,
-    int pointNumber)
-{
-    ESP_LOGI(TAG, "==================================");
-
-    ESP_LOGI(
-        TAG,
-        "Moving to path point %d",
-        pointNumber);
-
-    ESP_LOGI(
-        TAG,
-        "Target coordinate: z=%d mm, y=%d mm",
-        point.z,
-        point.y);
-
-    ESP_LOGI(
-        TAG,
-        "Shoulder target = %d",
-        point.shoulder_position);
-
-    ESP_LOGI(
-        TAG,
-        "Elbow target = %d",
-        point.elbow_position);
-
-    ESP_LOGI(TAG, "==================================");
-
-
-    // --------------------------------------------------
-    // Command both joints
-    // --------------------------------------------------
-
-    if (bus.WritePosEx(
-            SHOULDER_ID,
-            point.shoulder_position,
-            SPEED,
-            ACCELERATION) != 1)
-    {
-        ESP_LOGE(
-            TAG,
-            "Shoulder command failed");
-
-        return false;
-    }
-
-
-    vTaskDelay(
-        pdMS_TO_TICKS(100));
-
-
-    if (bus.WritePosEx(
-            ELBOW_ID,
-            point.elbow_position,
-            SPEED,
-            ACCELERATION) != 1)
-    {
-        ESP_LOGE(
-            TAG,
-            "Elbow command failed");
-
-        return false;
-    }
-
-
-    // --------------------------------------------------
-    // Wait until both joints actually arrive
-    // --------------------------------------------------
-
-    if (!waitForPosition(
-            bus,
-            SHOULDER_ID,
-            point.shoulder_position,
-            "Shoulder"))
-    {
-        return false;
-    }
-
-
-    if (!waitForPosition(
-            bus,
-            ELBOW_ID,
-            point.elbow_position,
-            "Elbow"))
-    {
-        return false;
-    }
-
-
-    int shoulderReadback =
-        bus.ReadPos(SHOULDER_ID);
-
-    int elbowReadback =
-        bus.ReadPos(ELBOW_ID);
-
-
-    ESP_LOGI(
-        TAG,
-        "Point %d reached",
-        pointNumber);
-
-    ESP_LOGI(
-        TAG,
-        "Shoulder readback = %d",
-        shoulderReadback);
-
-    ESP_LOGI(
-        TAG,
-        "Elbow readback = %d",
-        elbowReadback);
-
-
-    // Small pause before next point
-    vTaskDelay(
-        pdMS_TO_TICKS(1500));
-
-
-    return true;
-}
-
-
-// --------------------------------------------------
-// Main
-// --------------------------------------------------
-
 extern "C" void app_main(void)
 {
-    ESP_LOGI(TAG, "==================================");
-    ESP_LOGI(TAG, "Aether 3-Point IK Path Test");
-    ESP_LOGI(TAG, "==================================");
-
     ESP_LOGI(
         TAG,
-        "L1 = 135 mm");
-
-    ESP_LOGI(
-        TAG,
-        "L2 = 85 mm");
+        "Starting ArmController multi-angle test");
 
 
-    SMS_STS bus;
+    ArmController arm;
 
 
     // --------------------------------------------------
-    // Initialize servo bus
+    // Initialize arm
     // --------------------------------------------------
 
-    if (!setup(
-            &bus,
-            SERVO_UART,
-            SERVO_TX_PIN,
-            SERVO_RX_PIN))
+    if (!arm.begin())
     {
         ESP_LOGE(
             TAG,
-            "Failed to initialize servo UART");
+            "Arm initialization failed");
 
-        return;
-    }
-
-
-    // --------------------------------------------------
-    // Wait for servo power
-    // --------------------------------------------------
-
-    ESP_LOGI(
-        TAG,
-        "Waiting for servos...");
-
-
-    while (true)
-    {
-        int shoulderPing =
-            bus.Ping(SHOULDER_ID);
-
-        vTaskDelay(
-            pdMS_TO_TICKS(100));
-
-        int elbowPing =
-            bus.Ping(ELBOW_ID);
-
-
-        if (
-            shoulderPing == SHOULDER_ID &&
-            elbowPing == ELBOW_ID)
-        {
-            ESP_LOGI(
-                TAG,
-                "Both servos detected");
-
-            break;
-        }
-
-
-        ESP_LOGW(
-            TAG,
-            "Waiting... Shoulder=%s Elbow=%s",
-            shoulderPing == SHOULDER_ID
-                ? "OK"
-                : "FAIL",
-            elbowPing == ELBOW_ID
-                ? "OK"
-                : "FAIL");
-
-
-        vTaskDelay(
-            pdMS_TO_TICKS(1000));
-    }
-
-
-    // --------------------------------------------------
-    // Enable torque
-    // --------------------------------------------------
-
-    bus.EnableTorque(
-        SHOULDER_ID,
-        1);
-
-    bus.EnableTorque(
-        ELBOW_ID,
-        1);
-
-
-    // --------------------------------------------------
-    // Establish known starting pose
-    // --------------------------------------------------
-
-    ESP_LOGI(
-        TAG,
-        "Returning arm to straight starting pose");
-
-
-    if (bus.WritePosEx(
-            ELBOW_ID,
-            ELBOW_START,
-            SPEED,
-            ACCELERATION) != 1)
-    {
-        ESP_LOGE(
-            TAG,
-            "Elbow start command failed");
-
-        return;
-    }
-
-
-    if (!waitForPosition(
-            bus,
-            ELBOW_ID,
-            ELBOW_START,
-            "Elbow"))
-    {
-        return;
-    }
-
-
-    if (bus.WritePosEx(
-            SHOULDER_ID,
-            SHOULDER_START,
-            SPEED,
-            ACCELERATION) != 1)
-    {
-        ESP_LOGE(
-            TAG,
-            "Shoulder start command failed");
-
-        return;
-    }
-
-
-    if (!waitForPosition(
-            bus,
-            SHOULDER_ID,
-            SHOULDER_START,
-            "Shoulder"))
-    {
         return;
     }
 
 
     ESP_LOGI(
         TAG,
-        "Straight starting pose confirmed");
+        "Initial shoulder position = %d",
+        arm.getShoulderPosition());
 
     ESP_LOGI(
         TAG,
-        "Path begins in 3 seconds");
+        "Initial elbow position = %d",
+        arm.getElbowPosition());
+
 
     ESP_LOGI(
         TAG,
-        "Be ready to remove 12 V power if needed");
+        "Test begins in 3 seconds");
 
 
     vTaskDelay(
@@ -485,7 +97,7 @@ extern "C" void app_main(void)
 
 
     // --------------------------------------------------
-    // Execute path
+    // Execute angle path
     // --------------------------------------------------
 
     for (
@@ -493,45 +105,115 @@ extern "C" void app_main(void)
         i < PATH_LENGTH;
         i++)
     {
-        if (!moveToPoint(
-                bus,
-                PATH[i],
-                i + 1))
+        ESP_LOGI(
+            TAG,
+            "==================================");
+
+        ESP_LOGI(
+            TAG,
+            "Moving to %s",
+            PATH[i].name);
+
+        ESP_LOGI(
+            TAG,
+            "Shoulder angle = %.2f deg",
+            PATH[i].shoulderDegrees);
+
+        ESP_LOGI(
+            TAG,
+            "Elbow angle = %.2f deg",
+            PATH[i].elbowDegrees);
+
+
+        if (!arm.moveToAngles(
+                PATH[i].shoulderDegrees,
+                PATH[i].elbowDegrees))
         {
             ESP_LOGE(
                 TAG,
-                "Path stopped at point %d",
-                i + 1);
+                "Movement to %s failed",
+                PATH[i].name);
 
             return;
         }
+
+
+        ESP_LOGI(
+            TAG,
+            "%s reached",
+            PATH[i].name);
+
+        ESP_LOGI(
+            TAG,
+            "Shoulder readback = %d",
+            arm.getShoulderPosition());
+
+        ESP_LOGI(
+            TAG,
+            "Elbow readback = %d",
+            arm.getElbowPosition());
+
+
+        // Pause so movement is easy to observe
+        vTaskDelay(
+            pdMS_TO_TICKS(1500));
     }
 
 
     // --------------------------------------------------
-    // Finished
+    // Park vertically
     // --------------------------------------------------
-
-    ESP_LOGI(TAG, "==================================");
 
     ESP_LOGI(
         TAG,
-        "IK PATH COMPLETE");
+        "==================================");
+
+    ESP_LOGI(
+        TAG,
+        "Angle path complete");
+
+    ESP_LOGI(
+        TAG,
+        "Parking arm vertically");
+
+
+    if (!arm.park())
+    {
+        ESP_LOGE(
+            TAG,
+            "Failed to park arm");
+
+        return;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "==================================");
+
+    ESP_LOGI(
+        TAG,
+        "MULTI-ANGLE TEST COMPLETE");
 
     ESP_LOGI(
         TAG,
         "Final shoulder = %d",
-        bus.ReadPos(SHOULDER_ID));
+        arm.getShoulderPosition());
 
     ESP_LOGI(
         TAG,
         "Final elbow = %d",
-        bus.ReadPos(ELBOW_ID));
+        arm.getElbowPosition());
 
-    ESP_LOGI(TAG, "==================================");
+    ESP_LOGI(
+        TAG,
+        "Arm is parked vertically");
+
+    ESP_LOGI(
+        TAG,
+        "==================================");
 
 
-    // Hold final pose
     while (true)
     {
         vTaskDelay(
