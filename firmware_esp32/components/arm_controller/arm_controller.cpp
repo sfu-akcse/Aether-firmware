@@ -258,6 +258,10 @@ bool ArmController::moveToPositions(
     int shoulderPosition,
     int elbowPosition)
 {
+    // --------------------------------------------------
+    // Safety check
+    // --------------------------------------------------
+
     if (!positionsAreSafe(
             shoulderPosition,
             elbowPosition))
@@ -272,7 +276,7 @@ bool ArmController::moveToPositions(
 
     ESP_LOGI(
         TAG,
-        "Moving arm:");
+        "Moving arm synchronously:");
 
     ESP_LOGI(
         TAG,
@@ -285,42 +289,60 @@ bool ArmController::moveToPositions(
         elbowPosition);
 
 
-    // Command shoulder
-    if (bus.WritePosEx(
-            SHOULDER_ID,
-            shoulderPosition,
-            SPEED,
-            ACCELERATION) != 1)
+    // --------------------------------------------------
+    // Prepare synchronized command
+    // --------------------------------------------------
+
+    u8 ids[2] =
     {
-        ESP_LOGE(
-            TAG,
-            "Shoulder movement command failed");
-
-        return false;
-    }
+        SHOULDER_ID,
+        ELBOW_ID
+    };
 
 
-    // Very small bus spacing
-    vTaskDelay(
-        pdMS_TO_TICKS(100));
-
-
-    // Command elbow
-    if (bus.WritePosEx(
-            ELBOW_ID,
-            elbowPosition,
-            SPEED,
-            ACCELERATION) != 1)
+    s16 positions[2] =
     {
-        ESP_LOGE(
-            TAG,
-            "Elbow movement command failed");
-
-        return false;
-    }
+        static_cast<s16>(shoulderPosition),
+        static_cast<s16>(elbowPosition)
+    };
 
 
-    // Wait until both reach the target
+    u16 speeds[2] =
+    {
+        SPEED,
+        SPEED
+    };
+
+
+    u8 accelerations[2] =
+    {
+        ACCELERATION,
+        ACCELERATION
+    };
+
+
+    // --------------------------------------------------
+    // Send BOTH servo commands together
+    // --------------------------------------------------
+
+    bus.SyncWritePosEx(
+        ids,
+        2,
+        positions,
+        speeds,
+        accelerations
+    );
+
+
+    ESP_LOGI(
+        TAG,
+        "Synchronized command sent");
+
+
+    // --------------------------------------------------
+    // Wait for shoulder
+    // --------------------------------------------------
+
     if (!waitForPosition(
             SHOULDER_ID,
             shoulderPosition,
@@ -329,6 +351,10 @@ bool ArmController::moveToPositions(
         return false;
     }
 
+
+    // --------------------------------------------------
+    // Wait for elbow
+    // --------------------------------------------------
 
     if (!waitForPosition(
             ELBOW_ID,
@@ -346,7 +372,6 @@ bool ArmController::moveToPositions(
 
     return true;
 }
-
 
 // --------------------------------------------------
 // Shoulder angle -> servo count
@@ -426,6 +451,285 @@ bool ArmController::moveToAngles(
     );
 }
 
+bool ArmController::commandAngles(
+    float shoulderDegrees,
+    float elbowDegrees)
+{
+    const int shoulderPosition =
+        shoulderAngleToPosition(
+            shoulderDegrees);
+
+    const int elbowPosition =
+        elbowAngleToPosition(
+            elbowDegrees);
+
+
+    if (!positionsAreSafe(
+            shoulderPosition,
+            elbowPosition))
+    {
+        ESP_LOGE(
+            TAG,
+            "Live command rejected by safety limits");
+
+        return false;
+    }
+
+
+    u8 ids[2] =
+    {
+        SHOULDER_ID,
+        ELBOW_ID
+    };
+
+
+    s16 positions[2] =
+    {
+        static_cast<s16>(
+            shoulderPosition),
+
+        static_cast<s16>(
+            elbowPosition)
+    };
+
+
+    u16 speeds[2] =
+    {
+        SPEED,
+        SPEED
+    };
+
+
+    u8 accelerations[2] =
+    {
+        ACCELERATION,
+        ACCELERATION
+    };
+
+
+    bus.SyncWritePosEx(
+        ids,
+        2,
+        positions,
+        speeds,
+        accelerations
+    );
+
+
+    ESP_LOGI(
+        TAG,
+        "Live target: "
+        "shoulder %.2f -> %d, "
+        "elbow %.2f -> %d",
+        shoulderDegrees,
+        shoulderPosition,
+        elbowDegrees,
+        elbowPosition);
+
+
+    // IMPORTANT:
+    // No waitForPosition() here.
+    return true;
+}
+
+// // --------------------------------------------------
+// // Move to joint angles using smaller intermediate
+// // position steps for gentler large movements.
+// // --------------------------------------------------
+// bool ArmController::moveToAnglesSmooth(
+//     float shoulderDegrees,
+//     float elbowDegrees,
+//     int maxStepCounts)
+// {
+//     if (maxStepCounts <= 0)
+//     {
+//         ESP_LOGE(
+//             TAG,
+//             "maxStepCounts must be positive");
+
+//         return false;
+//     }
+
+
+//     // --------------------------------------------------
+//     // Convert final angles to calibrated servo positions
+//     // --------------------------------------------------
+
+//     const int targetShoulder =
+//         shoulderAngleToPosition(
+//             shoulderDegrees);
+
+//     const int targetElbow =
+//         elbowAngleToPosition(
+//             elbowDegrees);
+
+
+//     // Final target must still satisfy our normal limits.
+//     if (!positionsAreSafe(
+//             targetShoulder,
+//             targetElbow))
+//     {
+//         ESP_LOGE(
+//             TAG,
+//             "Smooth movement target is unsafe");
+
+//         return false;
+//     }
+
+
+//     // --------------------------------------------------
+//     // Read where the physical arm currently is
+//     // --------------------------------------------------
+
+//     const int startShoulder =
+//         getShoulderPosition();
+
+//     const int startElbow =
+//         getElbowPosition();
+
+
+//     if (
+//         startShoulder < 0 ||
+//         startElbow < 0)
+//     {
+//         ESP_LOGE(
+//             TAG,
+//             "Could not read current arm position");
+
+//         return false;
+//     }
+
+
+//     const int shoulderDifference =
+//         targetShoulder - startShoulder;
+
+//     const int elbowDifference =
+//         targetElbow - startElbow;
+
+
+//     const int shoulderDistance =
+//         std::abs(shoulderDifference);
+
+//     const int elbowDistance =
+//         std::abs(elbowDifference);
+
+
+//     // --------------------------------------------------
+//     // Determine how many intermediate steps are needed
+//     //
+//     // Example:
+//     // shoulder needs 900 counts
+//     // maxStepCounts = 100
+//     //
+//     // → about 9 steps
+//     // --------------------------------------------------
+
+//     const int largestDistance =
+//         shoulderDistance > elbowDistance
+//             ? shoulderDistance
+//             : elbowDistance;
+
+
+//     int steps =
+//         (largestDistance + maxStepCounts - 1)
+//         / maxStepCounts;
+
+
+//     if (steps < 1)
+//     {
+//         steps = 1;
+//     }
+
+
+//     ESP_LOGI(
+//         TAG,
+//         "Smooth joint movement:");
+
+//     ESP_LOGI(
+//         TAG,
+//         "Shoulder: %d -> %d",
+//         startShoulder,
+//         targetShoulder);
+
+//     ESP_LOGI(
+//         TAG,
+//         "Elbow: %d -> %d",
+//         startElbow,
+//         targetElbow);
+
+//     ESP_LOGI(
+//         TAG,
+//         "Intermediate steps = %d",
+//         steps);
+
+
+//     // --------------------------------------------------
+//     // Move both joints proportionally toward final target
+//     // --------------------------------------------------
+
+//     for (
+//         int step = 1;
+//         step <= steps;
+//         step++)
+//     {
+//         const float progress =
+//             static_cast<float>(step)
+//             / static_cast<float>(steps);
+
+
+//         const int nextShoulder =
+//             static_cast<int>(
+//                 std::lround(
+//                     startShoulder
+//                     + shoulderDifference
+//                     * progress
+//                 )
+//             );
+
+
+//         const int nextElbow =
+//             static_cast<int>(
+//                 std::lround(
+//                     startElbow
+//                     + elbowDifference
+//                     * progress
+//                 )
+//             );
+
+
+//         ESP_LOGI(
+//             TAG,
+//             "Smooth step %d/%d: "
+//             "shoulder=%d elbow=%d",
+//             step,
+//             steps,
+//             nextShoulder,
+//             nextElbow);
+
+
+//         if (!moveToPositions(
+//                 nextShoulder,
+//                 nextElbow))
+//         {
+//             ESP_LOGE(
+//                 TAG,
+//                 "Smooth movement failed "
+//                 "at step %d/%d",
+//                 step,
+//                 steps);
+
+//             return false;
+//         }
+//     }
+
+
+//     ESP_LOGI(
+//         TAG,
+//         "Smooth movement complete");
+
+
+//     return true;
+// }
 
 // --------------------------------------------------
 // Park arm vertically

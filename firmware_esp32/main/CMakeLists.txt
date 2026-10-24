@@ -7,4 +7,6 @@ idf_component_register(
 
     REQUIRES
         arm_controller
+        network_bridge
+        wifi_manager
 )

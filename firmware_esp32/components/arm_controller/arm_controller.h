@@ -47,6 +47,26 @@ public:
         float elbowDegrees
     );
 
+    /*
+    * Send a new joint-angle target without waiting
+    * for the servos to reach it.
+    *
+    * Intended for continuous/live control.
+    */
+    bool commandAngles(
+        float shoulderDegrees,
+        float elbowDegrees
+    );
+
+    // /*
+    // * Move to joint angles using smaller intermediate
+    // * position steps for gentler large movements.
+    // */
+    // bool moveToAnglesSmooth(
+    //     float shoulderDegrees,
+    //     float elbowDegrees,
+    //     int maxStepCounts = 100
+    // );
 
     /*
      * Move to the known safe vertical parked pose.
